@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/resolutionLayout"
+        style="@style/ConfigDropdown"
+        android:hint="Resolution">
+
+        <com.google.android.material.textfield.MaterialAutoCompleteTextView style="@style/ConfigDropdownField" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/fpsLayout"
+        style="@style/ConfigDropdown"
+        android:hint="Frame rate">
+
+        <com.google.android.material.textfield.MaterialAutoCompleteTextView style="@style/ConfigDropdownField" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/bitrateLayout"
+        style="@style/ConfigDropdown"
+        android:hint="Bitrate">
+
+        <com.google.android.material.textfield.MaterialAutoCompleteTextView style="@style/ConfigDropdownField" />
+    </com.google.android.material.textfield.TextInputLayout>
+</LinearLayout>

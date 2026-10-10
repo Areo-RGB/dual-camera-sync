@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical"
+    android:padding="8dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="4dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <com.example.myapplication.AspectTextureView
+                    android:id="@+id/previewMain"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content" />
+
+                <TextView
+                    style="@style/PreviewLabel"
+                    android:text="Main 1x" />
+            </FrameLayout>
+
+            <include
+                android:id="@+id/configMain"
+                layout="@layout/camera_config" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <com.example.myapplication.AspectTextureView
+                    android:id="@+id/previewTele"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content" />
+
+                <TextView
+                    style="@style/PreviewLabel"
+                    android:text="Tele 5x" />
+            </FrameLayout>
+
+            <include
+                android:id="@+id/configTele"
+                layout="@layout/camera_config" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/live"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="monospace"
+        android:paddingTop="8dp"
+        android:textColor="#FF5252"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/status"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fontFamily="monospace"
+        android:paddingTop="8dp"
+        android:textColor="#CCCCCC"
+        android:textSize="11sp" />
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/modeLayout"
+        style="@style/ConfigDropdown"
+        android:hint="Mode">
+
+        <com.google.android.material.textfield.MaterialAutoCompleteTextView style="@style/ConfigDropdownField" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="8dp"
+        android:orientation="horizontal">
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/dynamicRangeLayout"
+            style="@style/ConfigDropdown"
+            android:layout_width="0dp"
+            android:layout_marginEnd="4dp"
+            android:layout_weight="1"
+            android:hint="Dynamic range">
+
+            <com.google.android.material.textfield.MaterialAutoCompleteTextView style="@style/ConfigDropdownField" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/previewLayout"
+            style="@style/ConfigDropdown"
+            android:layout_width="0dp"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:hint="Preview while recording">
+
+            <com.google.android.material.textfield.MaterialAutoCompleteTextView style="@style/ConfigDropdownField" />
+        </com.google.android.material.textfield.TextInputLayout>
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/record"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:backgroundTint="#D32F2F"
+        android:text="Record"
+        android:textSize="18sp" />
+</LinearLayout>
