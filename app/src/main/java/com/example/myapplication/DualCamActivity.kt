@@ -351,6 +351,7 @@ class DualCamActivity : AppCompatActivity() {
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
         onPermissionsChanged()
         handler.post(remoteHeartbeat)
+        UpdateChecker.check(this, ::out)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {

@@ -79,6 +79,7 @@ class RemoteControlActivity : AppCompatActivity() {
         super.onResume()
         val missing = RemoteLink.permissions().filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isEmpty()) startDiscovery() else requestPermissions(missing.toTypedArray(), 1)
+        UpdateChecker.check(this) { android.util.Log.i("DUALCAM", it) }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {

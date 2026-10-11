@@ -2,6 +2,14 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+import java.util.Properties
+
+val localProps = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+/** Signing config values: environment (CI secrets) first, local.properties (dev machine) second. */
+fun signingProp(name: String): String? = System.getenv(name) ?: localProps.getProperty(name)
+
 android {
     namespace = "com.example.myapplication"
     compileSdk {
@@ -12,14 +20,30 @@ android {
         applicationId = "com.example.myapplication"
         minSdk = 33
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = (project.findProperty("versionCode") as String).toInt()
+        versionName = project.findProperty("versionName") as String
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    val releaseStoreFile = signingProp("RELEASE_STORE_FILE")?.let(::file)?.takeIf { it.exists() }
+    val hasReleaseSigning = releaseStoreFile != null &&
+        signingProp("RELEASE_STORE_PASSWORD") != null &&
+        signingProp("RELEASE_KEY_ALIAS") != null &&
+        signingProp("RELEASE_KEY_PASSWORD") != null
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = releaseStoreFile
+                storePassword = signingProp("RELEASE_STORE_PASSWORD")
+                keyAlias = signingProp("RELEASE_KEY_ALIAS")
+                keyPassword = signingProp("RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
