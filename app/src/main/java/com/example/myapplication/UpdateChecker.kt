@@ -31,9 +31,19 @@ object UpdateChecker {
 
     private data class Update(val versionCode: Long, val versionName: String, val apkUrl: String)
 
+    @Volatile private var inFlight = false
+
+    @Synchronized
+    private fun claimInFlight(): Boolean {
+        if (inFlight) return false
+        inFlight = true
+        return true
+    }
+
     fun check(activity: Activity, log: (String) -> Unit) {
         val prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         if (System.currentTimeMillis() - prefs.getLong(KEY_LAST_CHECK, 0) < CHECK_INTERVAL_MS) return
+        if (!claimInFlight()) return
         thread(name = "update-check", isDaemon = true) {
             try {
                 val update = fetchMeta() ?: run {
@@ -63,6 +73,8 @@ object UpdateChecker {
                 downloadAndInstall(activity.applicationContext, activity, update, log)
             } catch (e: Exception) {
                 Log.w("DUALCAM", "update check failed", e)
+            } finally {
+                inFlight = false
             }
         }
     }
@@ -122,8 +134,9 @@ object UpdateChecker {
                 )
             }
         }
+        // DownloadManager broadcasts from the system uid, so the receiver must be exported.
         appContext.registerReceiver(
             receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
-            Context.RECEIVER_NOT_EXPORTED)
+            Context.RECEIVER_EXPORTED)
     }
 }
