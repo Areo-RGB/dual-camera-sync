@@ -19,6 +19,7 @@ class Dropdown<T>(private val layout: TextInputLayout, private val onChange: (T)
         set(enabled) { layout.isEnabled = enabled }
 
     init {
+        field.isSaveEnabled = false
         field.setOnItemClickListener { _, _, position, _ -> select(options[position].second) }
     }
 

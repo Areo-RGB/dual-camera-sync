@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "mobilecli": {
+      "source": "mobile-next/mobilecli",
+      "sourceType": "github",
+      "skillPath": "skills/mobilecli/SKILL.md",
+      "computedHash": "820474786825498fd20c85a5ec33953a61494fcab32e7dde17641caf55b7cdf3"
+    }
+  }
+}

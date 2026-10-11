@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.graphics.SurfaceTexture
+import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraConstrainedHighSpeedCaptureSession
@@ -118,10 +119,10 @@ class DualCamActivity : AppCompatActivity() {
     }
 
     /** The resolution / frame rate / bitrate dropdowns of one camera. */
-    private class CameraConfig(root: View, onFpsChange: () -> Unit) {
-        val resolution = Dropdown<Size>(root.findViewById(R.id.resolutionLayout))
-        val fps = Dropdown<Int>(root.findViewById(R.id.fpsLayout)) { onFpsChange() }
-        val bitrate = Dropdown<Int>(root.findViewById(R.id.bitrateLayout))
+    private class CameraConfig(root: View, onFpsChange: () -> Unit, onSave: () -> Unit = {}) {
+        val resolution = Dropdown<Size>(root.findViewById(R.id.resolutionLayout)) { onSave() }
+        val fps = Dropdown<Int>(root.findViewById(R.id.fpsLayout)) { onFpsChange(); onSave() }
+        val bitrate = Dropdown<Int>(root.findViewById(R.id.bitrateLayout)) { onSave() }
 
         init {
             bitrate.setOptions(listOf("Auto" to 0, "50 Mbps" to 50, "100 Mbps" to 100, "150 Mbps" to 150))
@@ -208,6 +209,49 @@ class DualCamActivity : AppCompatActivity() {
         }
     }
 
+    private val prefs by lazy { getSharedPreferences("dualcam_settings", MODE_PRIVATE) }
+
+    /**
+     * While true, [saveSettings] is a no-op. Set during [onCreate] so the initial
+     * [applyMode] calls don't overwrite the saved values before they are restored.
+     */
+    private var suppressSave = true
+
+    private fun Size.serialize() = "${width}x${height}"
+
+    private fun parseSize(s: String?): Size? = try {
+        s?.split("x")?.let { Size(it[0].toInt(), it[1].toInt()) }?.takeIf { it.width > 0 && it.height > 0 }
+    } catch (e: Exception) {
+        null
+    }
+
+    /** Persists the current UI selections so the next launch restores them. */
+    private fun saveSettings() {
+        if (suppressSave) return
+        if (!::mode.isInitialized || !::configMain.isInitialized || !::configTele.isInitialized ||
+            !::previewWhileRecording.isInitialized || !::dynamicRange.isInitialized
+        ) return
+        prefs.edit()
+            .putString("mode", mode.value.name)
+            .putBoolean("hdr", dynamicRange.value)
+            .putBoolean("preview", previewWhileRecording.value)
+            .putString("main_res", configMain.resolution.value.serialize())
+            .putInt("main_fps", configMain.fps.value)
+            .putInt("main_bitrate", configMain.bitrate.value)
+            .putString("tele_res", configTele.resolution.value.serialize())
+            .putInt("tele_fps", configTele.fps.value)
+            .putInt("tele_bitrate", configTele.bitrate.value)
+            .apply()
+    }
+
+    /** Restores one camera's selections silently; falls back to [defaultRes] if nothing was saved. */
+    private fun CameraConfig.restore(prefix: String, defaultRes: Size? = null) {
+        prefs.getString("${prefix}_res", null)?.let { parseSize(it) }?.let { resolution.select(it, notify = false) }
+            ?: defaultRes?.let { resolution.select(it, notify = false) }
+        prefs.getInt("${prefix}_fps", -1).takeIf { it > 0 }?.let { fps.select(it, notify = false) }
+        prefs.getInt("${prefix}_bitrate", -1).takeIf { it >= 0 }?.let { bitrate.select(it, notify = false) }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_dual_cam)
@@ -226,18 +270,25 @@ class DualCamActivity : AppCompatActivity() {
         remote = RemoteAdvertiser(this, onCommand = { handler.post { onRemoteCommand(it) } }, onConnected = { handler.post { sendRemoteStatus() } })
 
         val restartPreview = { handler.post { startPreview() }; Unit }
-        configMain = CameraConfig(findViewById(R.id.configMain), restartPreview)
-        configTele = CameraConfig(findViewById(R.id.configTele), restartPreview)
+        val persist = { saveSettings(); Unit }
+        configMain = CameraConfig(findViewById(R.id.configMain), restartPreview, persist)
+        configTele = CameraConfig(findViewById(R.id.configTele), restartPreview, persist)
         mode = Dropdown(findViewById(R.id.modeLayout)) { applyMode() }
         mode.setOptions(listOf((if (hasTele) "Dual: main + tele" else "Main only") to Mode.DUAL,
             "Slow-mo: main only (120/240 fps)" to Mode.SLOW_MO))
         dynamicRange = Dropdown(findViewById(R.id.dynamicRangeLayout)) { applyMode() }
         dynamicRange.setOptions(listOf("SDR" to false, "HDR (HLG 10-bit)" to true))
-        previewWhileRecording = Dropdown(findViewById(R.id.previewLayout))
+        previewWhileRecording = Dropdown(findViewById(R.id.previewLayout)) { persist() }
         previewWhileRecording.setOptions(listOf("On" to true, "Off + dim screen" to false))
+        // Restore last-used settings; unsaved keys keep the SDR / On / 4K defaults.
+        prefs.getString("mode", null)?.let { runCatching { Mode.valueOf(it) }.getOrNull() }
+            ?.let { mode.select(it, notify = false) }
+        dynamicRange.select(prefs.getBoolean("hdr", false), notify = false)
+        if (prefs.contains("preview")) previewWhileRecording.select(prefs.getBoolean("preview", true), notify = false)
         applyMode()
-        configMain.resolution.select(Size(3840, 2160), notify = false)
-        configTele.resolution.select(Size(3840, 2160), notify = false)
+        configMain.restore("main", Size(3840, 2160))
+        configTele.restore("tele", Size(3840, 2160))
+        applyMode()
 
         if (intent.hasExtra("seconds")) {
             autoTest = true
@@ -253,6 +304,8 @@ class DualCamActivity : AppCompatActivity() {
             }
             previewWhileRecording.select(intent.getBooleanExtra("preview", true), notify = false)
         }
+        suppressSave = false
+        saveSettings()
 
         recordButton.setOnClickListener {
             recordButton.isEnabled = false
@@ -279,6 +332,7 @@ class DualCamActivity : AppCompatActivity() {
         setControlsEnabled(true)
         previewTele.visibility = if (m == Mode.DUAL && hasTele) View.VISIBLE else View.INVISIBLE
         handler.post { startPreview() }
+        saveSettings()
     }
 
     private fun setControlsEnabled(enabled: Boolean) {
@@ -312,6 +366,7 @@ class DualCamActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        saveSettings()
         handler.removeCallbacks(remoteHeartbeat)
         remote.stop()
         handler.post {
@@ -382,6 +437,7 @@ class DualCamActivity : AppCompatActivity() {
         val fps = if (dual) maxOf(configMain.settings(hdr).fps, if (hasTele) configTele.settings(hdr).fps else 0) else 30
         val targets = listOfNotNull(pMain to mainId, pTele?.let { it to teleId!! })
         session?.close(); session = null
+        try {
         d.createCaptureSession(SessionConfiguration(SessionConfiguration.SESSION_REGULAR,
             targets.map { (surface, id) -> physical(surface, id, hdr) }, executor,
             object : CameraCaptureSession.StateCallback() {
@@ -397,6 +453,10 @@ class DualCamActivity : AppCompatActivity() {
                 }
                 override fun onConfigureFailed(s: CameraCaptureSession) { out("Preview session failed") }
             }))
+        } catch (e: CameraAccessException) {
+            Log.w(tag, "preview session failed, retrying", e)
+            handler.postDelayed({ startPreview() }, 300)
+        }
     }
 
     private fun createTrack(name: String, settings: Settings, physicalId: String, stamp: String): Track {
