@@ -42,6 +42,10 @@ android {
         }
     }
     buildTypes {
+        debug {
+            // Separate id so debug builds install alongside the signed release build.
+            applicationIdSuffix = ".debug"
+        }
         release {
             if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
         }
