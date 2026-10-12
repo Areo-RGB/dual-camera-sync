@@ -3,6 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- Nearby Connections, for remote start/stop from the tablet -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
@@ -29,7 +30,7 @@
         <activity
             android:name=".DualCamActivity"
             android:exported="true"
-            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:theme="@style/Theme.MyApplication.Camera">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

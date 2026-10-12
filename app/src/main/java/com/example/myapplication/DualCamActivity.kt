@@ -3,7 +3,10 @@ package com.example.myapplication
 import android.Manifest
 import android.content.ContentValues
 import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.graphics.Matrix
 import android.graphics.SurfaceTexture
+import android.hardware.display.DisplayManager
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
@@ -35,6 +38,7 @@ import android.view.TextureView
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import java.text.SimpleDateFormat
@@ -55,6 +59,9 @@ import java.util.concurrent.Executor
  * streams, so HDR is a single switch covering both cameras and the previews. HLG at 60 fps is
  * rejected by the HAL (the session fails to reconfigure), so HDR is limited to 30 fps.
  *
+ * Audio records the microphone as AAC into the main camera's video file only. The microphone
+ * permission is requested when audio is first switched on, and recording continues silent without it.
+ *
  * "Preview off" records without the preview streams and dims the screen while recording, to
  * reduce camera processing and display load.
  *
@@ -63,18 +70,28 @@ import java.util.concurrent.Executor
  *
  * Phones without a tele record the main camera alone in the regular mode.
  *
- * While this screen is open the phone advertises itself over Nearby Connections, so the
- * tablet's [RemoteControlActivity] can start and stop recording and see the phone's status.
+ * The screen follows the device orientation without being recreated, so rotating keeps the camera
+ * session, a running recording and the tablet link alive. Each recording is tagged with the
+ * orientation the phone was held in when it started.
+ *
+ * With Remote switched on (off by default), the phone advertises itself over Nearby Connections
+ * while this screen is open, so the tablet's [RemoteControlActivity] can start and stop recording
+ * and see the phone's status. The Nearby permissions are only requested once Remote is switched on.
  *
  * Auto-test via adb: am start -n com.example.myapplication/.DualCamActivity --ei seconds 10
  *     [--es mode slowmo]
  *     [--es res 4k|1080|720] [--ei fps 60] [--ei bitrate 100]  (both cameras; bitrate in Mbps)
  *     [--es main_res ..] [--ei tele_fps ..] [--ei tele_bitrate ..]  (per camera)
- *     [--ez hdr true] [--ez preview false]
+ *     [--ez hdr true] [--ez preview false] [--ez audio true]
  * Results are logged under tag DUALCAM.
  */
 class DualCamActivity : AppCompatActivity() {
     private val tag = "DUALCAM"
+
+    private companion object {
+        const val AUDIO_PERMISSION_REQUEST = 2
+        const val REMOTE_PERMISSION_REQUEST = 3
+    }
     private val previewSize = Size(1280, 720)
 
     private enum class Mode { DUAL, SLOW_MO }
@@ -89,6 +106,8 @@ class DualCamActivity : AppCompatActivity() {
     private lateinit var mode: Dropdown<Mode>
     private lateinit var dynamicRange: Dropdown<Boolean>
     private lateinit var previewWhileRecording: Dropdown<Boolean>
+    private lateinit var audio: Dropdown<Boolean>
+    private lateinit var remoteEnabled: Dropdown<Boolean>
 
     private lateinit var thread: HandlerThread
     private lateinit var handler: Handler
@@ -101,6 +120,7 @@ class DualCamActivity : AppCompatActivity() {
     private lateinit var remote: RemoteAdvertiser
     @Volatile private var liveLine = ""
     private var sensorOrientation = 90
+    @Volatile private var displayRotation = Surface.ROTATION_0
     private var device: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var recording: Recording? = null
@@ -229,12 +249,15 @@ class DualCamActivity : AppCompatActivity() {
     private fun saveSettings() {
         if (suppressSave) return
         if (!::mode.isInitialized || !::configMain.isInitialized || !::configTele.isInitialized ||
-            !::previewWhileRecording.isInitialized || !::dynamicRange.isInitialized
+            !::previewWhileRecording.isInitialized || !::dynamicRange.isInitialized || !::audio.isInitialized ||
+            !::remoteEnabled.isInitialized
         ) return
         prefs.edit()
             .putString("mode", mode.value.name)
             .putBoolean("hdr", dynamicRange.value)
             .putBoolean("preview", previewWhileRecording.value)
+            .putBoolean("audio", audio.value)
+            .putBoolean("remote", remoteEnabled.value)
             .putString("main_res", configMain.resolution.value.serialize())
             .putInt("main_fps", configMain.fps.value)
             .putInt("main_bitrate", configMain.bitrate.value)
@@ -258,6 +281,7 @@ class DualCamActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         previewMain = findViewById(R.id.previewMain)
         previewTele = findViewById(R.id.previewTele)
+        applyOrientation(resources.configuration)
         status = findViewById(R.id.status)
         live = findViewById(R.id.live)
         recordButton = findViewById(R.id.record)
@@ -275,16 +299,29 @@ class DualCamActivity : AppCompatActivity() {
         configTele = CameraConfig(findViewById(R.id.configTele), restartPreview, persist)
         mode = Dropdown(findViewById(R.id.modeLayout)) { applyMode() }
         mode.setOptions(listOf((if (hasTele) "Dual: main + tele" else "Main only") to Mode.DUAL,
-            "Slow-mo: main only (120/240 fps)" to Mode.SLOW_MO))
+            "Slow-mo: main only" to Mode.SLOW_MO))
         dynamicRange = Dropdown(findViewById(R.id.dynamicRangeLayout)) { applyMode() }
         dynamicRange.setOptions(listOf("SDR" to false, "HDR (HLG 10-bit)" to true))
         previewWhileRecording = Dropdown(findViewById(R.id.previewLayout)) { persist() }
         previewWhileRecording.setOptions(listOf("On" to true, "Off + dim screen" to false))
+        audio = Dropdown(findViewById(R.id.audioLayout)) { on ->
+            if (on && !hasAudioPermission()) requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), AUDIO_PERMISSION_REQUEST)
+            persist()
+        }
+        audio.setOptions(listOf("Off" to false, "On" to true))
+        remoteEnabled = Dropdown(findViewById(R.id.remoteLayout)) { on ->
+            if (on && !hasRemotePermissions()) requestPermissions(RemoteLink.permissions().toTypedArray(), REMOTE_PERMISSION_REQUEST)
+            else applyRemote()
+            persist()
+        }
+        remoteEnabled.setOptions(listOf("Off" to false, "On" to true))
         // Restore last-used settings; unsaved keys keep the SDR / On / 4K defaults.
         prefs.getString("mode", null)?.let { runCatching { Mode.valueOf(it) }.getOrNull() }
             ?.let { mode.select(it, notify = false) }
         dynamicRange.select(prefs.getBoolean("hdr", false), notify = false)
         if (prefs.contains("preview")) previewWhileRecording.select(prefs.getBoolean("preview", true), notify = false)
+        audio.select(prefs.getBoolean("audio", false) && hasAudioPermission(), notify = false)
+        remoteEnabled.select(prefs.getBoolean("remote", false), notify = false)
         applyMode()
         configMain.restore("main", Size(3840, 2160))
         configTele.restore("tele", Size(3840, 2160))
@@ -292,7 +329,7 @@ class DualCamActivity : AppCompatActivity() {
 
         if (intent.hasExtra("seconds")) {
             autoTest = true
-            if (intent.getStringExtra("mode") == "slowmo") mode.select(Mode.SLOW_MO, notify = false)
+            mode.select(if (intent.getStringExtra("mode") == "slowmo") Mode.SLOW_MO else Mode.DUAL, notify = false)
             dynamicRange.select(intent.getBooleanExtra("hdr", false), notify = false)
             applyMode()
             for ((prefix, config) in listOf("main" to configMain, "tele" to configTele)) {
@@ -303,6 +340,7 @@ class DualCamActivity : AppCompatActivity() {
                 )
             }
             previewWhileRecording.select(intent.getBooleanExtra("preview", true), notify = false)
+            audio.select(intent.getBooleanExtra("audio", false), notify = false)
         }
         suppressSave = false
         saveSettings()
@@ -313,13 +351,67 @@ class DualCamActivity : AppCompatActivity() {
         }
 
         val listener = object : TextureView.SurfaceTextureListener {
-            override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) { handler.post { startPreview() } }
-            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+            override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                updatePreviewTransforms()
+                handler.post { startPreview() }
+            }
+            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) = updatePreviewTransforms()
             override fun onSurfaceTextureDestroyed(st: SurfaceTexture) = true
             override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
         }
         previewMain.surfaceTextureListener = listener
         previewTele.surfaceTextureListener = listener
+        getSystemService(DisplayManager::class.java).registerDisplayListener(displayListener, null)
+    }
+
+    /** Catches 180° turns between the two landscape orientations, which change no configuration. */
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayChanged(displayId: Int) = updatePreviewTransforms()
+        override fun onDisplayAdded(displayId: Int) {}
+        override fun onDisplayRemoved(displayId: Int) {}
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyOrientation(newConfig)
+    }
+
+    /** Stacks the previews above the controls in portrait and places them side by side in landscape. */
+    private fun applyOrientation(config: Configuration) {
+        val landscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val gap = (8 * resources.displayMetrics.density).toInt()
+        findViewById<LinearLayout>(R.id.root).orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+        findViewById<View>(R.id.cameraPane).layoutParams =
+            if (landscape) LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 3f)
+            else LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        findViewById<View>(R.id.controlsPane).layoutParams =
+            if (landscape) LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 2f).apply { marginStart = gap }
+            else LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+        previewMain.requestLayout()
+        previewTele.requestLayout()
+    }
+
+    /**
+     * The camera orients preview buffers for the portrait natural orientation, so when the display
+     * is turned, rotate them back upright and undo the stretch to the view's turned aspect ratio.
+     */
+    private fun updatePreviewTransforms() {
+        val rotation = display?.rotation ?: Surface.ROTATION_0
+        displayRotation = rotation
+        for (view in listOf(previewMain, previewTele)) {
+            val w = view.width.toFloat()
+            val h = view.height.toFloat()
+            if (w == 0f || h == 0f) continue
+            view.setTransform(Matrix().apply {
+                when (rotation) {
+                    Surface.ROTATION_90, Surface.ROTATION_270 -> {
+                        postScale(h / w, w / h, w / 2, h / 2)
+                        postRotate(if (rotation == Surface.ROTATION_90) -90f else 90f, w / 2, h / 2)
+                    }
+                    Surface.ROTATION_180 -> postRotate(180f, w / 2, h / 2)
+                }
+            })
+        }
     }
 
     /** Updates the available options for the selected mode and dynamic range. */
@@ -342,11 +434,12 @@ class DualCamActivity : AppCompatActivity() {
         mode.enabled = enabled
         dynamicRange.enabled = enabled && dual
         previewWhileRecording.enabled = enabled
+        audio.enabled = enabled
     }
 
     override fun onResume() {
         super.onResume()
-        val missing = (listOf(Manifest.permission.CAMERA) + RemoteLink.permissions())
+        val missing = (listOf(Manifest.permission.CAMERA) + if (remoteEnabled.value) RemoteLink.permissions() else emptyList())
             .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
         onPermissionsChanged()
@@ -356,13 +449,32 @@ class DualCamActivity : AppCompatActivity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == AUDIO_PERMISSION_REQUEST) {
+            if (!hasAudioPermission()) { audio.select(false); out("Microphone permission needed for audio") }
+            return
+        }
+        if (requestCode == REMOTE_PERMISSION_REQUEST) {
+            if (!hasRemotePermissions()) { remoteEnabled.select(false); out("Nearby permissions needed for tablet remote") }
+            else applyRemote()
+            return
+        }
         onPermissionsChanged()
     }
+
+    private fun hasAudioPermission() = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    private fun hasRemotePermissions() = RemoteLink.permissions().all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
 
     private fun onPermissionsChanged() {
         if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) handler.post { openCamera() }
         else out("Camera permission needed")
-        if (RemoteLink.permissions().all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }) remote.start()
+        applyRemote()
+    }
+
+    /** Advertises to the tablet while Remote is on and its permissions are granted; stops otherwise. */
+    private fun applyRemote() {
+        if (!remoteEnabled.value) { remote.stop(); return }
+        if (hasRemotePermissions()) remote.start()
         else out("Nearby permissions needed for tablet remote")
     }
 
@@ -379,6 +491,7 @@ class DualCamActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        getSystemService(DisplayManager::class.java).unregisterDisplayListener(displayListener)
         thread.quitSafely()
         super.onDestroy()
     }
@@ -460,7 +573,7 @@ class DualCamActivity : AppCompatActivity() {
         }
     }
 
-    private fun createTrack(name: String, settings: Settings, physicalId: String, stamp: String): Track {
+    private fun createTrack(name: String, settings: Settings, physicalId: String, stamp: String, withAudio: Boolean = false): Track {
         val label = settings.toString().replace(" ", "_")
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, "DualCam_${stamp}_${name}_$label.mp4")
@@ -472,11 +585,19 @@ class DualCamActivity : AppCompatActivity() {
         val pfd = contentResolver.openFileDescriptor(uri, "w")!!
         val surface = MediaCodec.createPersistentInputSurface()
         val size = settings.size
+        val mic = withAudio && hasAudioPermission()
         val recorder = MediaRecorder(this).apply {
+            if (mic) setAudioSource(MediaRecorder.AudioSource.CAMCORDER)
             setVideoSource(MediaRecorder.VideoSource.SURFACE)
             setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             setOutputFile(pfd.fileDescriptor)
             setVideoEncoder(MediaRecorder.VideoEncoder.HEVC)
+            if (mic) {
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setAudioSamplingRate(48_000)
+                setAudioChannels(2)
+                setAudioEncodingBitRate(256_000)
+            }
             setVideoSize(size.width, size.height)
             setVideoFrameRate(settings.fps)
             setCaptureRate(settings.fps.toDouble())
@@ -484,7 +605,8 @@ class DualCamActivity : AppCompatActivity() {
             if (settings.hdr) {
                 setVideoEncodingProfileLevel(CodecProfileLevel.HEVCProfileMain10, CodecProfileLevel.HEVCMainTierLevel51)
             }
-            setOrientationHint(sensorOrientation)
+            // Upright for how the phone is held: the rear sensor turned back by the display rotation.
+            setOrientationHint((sensorOrientation - displayRotation * 90 + 360) % 360)
             setInputSurface(surface)
             prepare()
         }
@@ -495,6 +617,7 @@ class DualCamActivity : AppCompatActivity() {
         val d = device ?: return
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val tracks = mutableListOf<Track>()
+        if (audio.value && !hasAudioPermission()) out("No microphone permission, recording without audio")
         try {
             session?.close(); session = null
             if (mode.value == Mode.SLOW_MO) startSlowMo(d, stamp, tracks) else startDual(d, stamp, tracks)
@@ -510,7 +633,7 @@ class DualCamActivity : AppCompatActivity() {
 
     private fun startDual(d: CameraDevice, stamp: String, tracks: MutableList<Track>) {
         val hdr = dynamicRange.value
-        tracks += createTrack("main", configMain.settings(hdr), mainId, stamp)
+        tracks += createTrack("main", configMain.settings(hdr), mainId, stamp, withAudio = audio.value)
         teleId?.let { tracks += createTrack("tele", configTele.settings(hdr), it, stamp) }
         val recordOutputs = tracks.map { physical(it.surface, it.physicalId, hdr) }
 
@@ -540,7 +663,7 @@ class DualCamActivity : AppCompatActivity() {
 
     private fun startSlowMo(d: CameraDevice, stamp: String, tracks: MutableList<Track>) {
         val settings = configMain.settings(hdr = false)
-        tracks += createTrack("main", settings, mainId, stamp)
+        tracks += createTrack("main", settings, mainId, stamp, withAudio = audio.value)
         // High-speed sessions take at most two outputs, both at a high-speed video size, and no
         // physical camera routing; the logical camera at its default 1x zoom streams the main sensor.
         // With the recorder as the only output the high-speed request list holds a single request,
