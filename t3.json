@@ -1,0 +1,16 @@
+{
+  "$schema": "https://t3.codes/schema/t3.json",
+  "iconPath": "app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp",
+  "scripts": [
+    {
+      "name": "Build (debug)",
+      "command": "./gradlew :app:assembleDebug",
+      "icon": "build"
+    },
+    {
+      "name": "Install debug on all devices",
+      "command": "bash scripts/install-debug.sh",
+      "icon": "debug"
+    }
+  ]
+}
