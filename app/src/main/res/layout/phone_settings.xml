@@ -74,7 +74,7 @@
 
             <TextView
                 style="@style/RemoteSectionLabel"
-                android:text="Main 1x" />
+                android:text="Slot 1" />
 
             <include
                 android:id="@+id/config1"
@@ -82,7 +82,7 @@
         </LinearLayout>
 
         <LinearLayout
-            android:id="@+id/secondColumn"
+            android:id="@+id/slot2Column"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -90,8 +90,8 @@
             android:orientation="vertical">
 
             <TextView
-                android:id="@+id/label2"
-                style="@style/RemoteSectionLabel" />
+                style="@style/RemoteSectionLabel"
+                android:text="Slot 2" />
 
             <include
                 android:id="@+id/config2"

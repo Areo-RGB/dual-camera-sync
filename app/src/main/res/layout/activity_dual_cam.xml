@@ -41,8 +41,8 @@
                         style="@style/PreviewOff" />
 
                     <TextView
-                        style="@style/PreviewLabel"
-                        android:text="Main 1x" />
+                        android:id="@+id/label1"
+                        style="@style/PreviewLabel" />
                 </FrameLayout>
 
                 <include
@@ -71,8 +71,8 @@
                         style="@style/PreviewOff" />
 
                     <TextView
-                        style="@style/PreviewLabel"
-                        android:id="@+id/label2" />
+                        android:id="@+id/label2"
+                        style="@style/PreviewLabel" />
                 </FrameLayout>
 
                 <include

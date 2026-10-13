@@ -22,9 +22,10 @@ import java.util.concurrent.CopyOnWriteArraySet
  * only connect to a single advertiser. Only short text messages are sent:
  *
  * - tablet -> phone: [START], [STOP] or `SETTINGS<TAB>key=value<TAB>...` with the keys mode, hdr,
- *   preview, audio and main_/tele_ res, fps and bitrate (see [CameraConfig.values])
+ *   preview, audio and slot1_/slot2_ cam, res, fps and bitrate (see [Slots.values])
  * - phone -> tablet: `STATUS<TAB>recording(0/1)<TAB>warning(0/1)<TAB>text`, and on connecting
- *   and after every settings change the same `SETTINGS` message plus `second=TELE/WIDE` (see [SecondCamera]), absent without one
+ *   and after every settings change the same `SETTINGS` message plus `lenses=WIDE,MAIN,...`,
+ *   the phone's cameras (see [Lens])
  */
 object RemoteLink {
     const val SERVICE_ID = "com.example.myapplication.dualcam"

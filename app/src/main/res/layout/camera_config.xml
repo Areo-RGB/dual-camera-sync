@@ -5,6 +5,14 @@
     android:orientation="vertical">
 
     <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/cameraLayout"
+        style="@style/ConfigDropdown"
+        android:hint="Camera">
+
+        <com.google.android.material.textfield.MaterialAutoCompleteTextView style="@style/ConfigDropdownField" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.textfield.TextInputLayout
         android:id="@+id/resolutionLayout"
         style="@style/ConfigDropdown"
         android:hint="Resolution">

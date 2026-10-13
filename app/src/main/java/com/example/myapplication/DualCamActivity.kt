@@ -46,19 +46,20 @@ import java.util.Locale
 import java.util.concurrent.Executor
 
 /**
- * Records the main and a second camera (5x tele or ultrawide, per phone) simultaneously into two separate HEVC videos, using
- * physical camera streams of the logical rear camera. Resolution, frame rate and bitrate are
- * configured per camera.
+ * Records two slots simultaneously into separate HEVC videos, each slot set to one of the phone's
+ * rear cameras (ultrawide, main, tele) or slot 2 off, using physical camera streams of the logical
+ * rear camera. Camera, resolution, frame rate and bitrate are configured per slot. Two slots
+ * because the phones stream at most two rear sensors at once.
  *
  * Slow-mo mode records the main camera alone at 120/240 fps through a constrained high-speed
- * session; the camera offers high-speed video only at 1080p/720p and not on the second camera. The file
+ * session; the camera offers high-speed video only at 1080p/720p and only on the main camera. The file
  * plays back in real time at the high frame rate, ready to be conformed to slow motion.
  *
  * HDR records 10-bit HLG. The camera only allows HLG10 streams to be combined with other HLG10
  * streams, so HDR is a single switch covering both cameras and the previews. HLG at 60 fps is
  * rejected by the HAL (the session fails to reconfigure), so HDR is limited to 30 fps.
  *
- * Audio records the microphone as AAC into the main camera's video file only. The microphone
+ * Audio records the microphone as AAC into slot 1's video file only. The microphone
  * permission is requested when audio is first switched on, and recording continues silent without it.
  *
  * "Preview off" records without the preview streams and dims the screen while recording, to
@@ -69,7 +70,7 @@ import java.util.concurrent.Executor
  * Both sensors share one capture request stream, so they run at the higher of the two frame
  * rates; a 30 fps camera paired with a 60 fps one only receives every other frame.
  *
- * Phones without a second camera record the main camera alone in the regular mode.
+ * Phones with a single usable camera record it alone in slot 1.
  *
  * The screen is landscape only and flips between the two landscape sides without being recreated,
  * so turning the phone keeps the camera session, a running recording and the tablet link alive.
@@ -81,8 +82,9 @@ import java.util.concurrent.Executor
  *
  * Auto-test via adb: am start -n com.example.myapplication/.DualCamActivity --ei seconds 10
  *     [--es mode slowmo]
- *     [--es res 4k|1080|720] [--ei fps 60] [--ei bitrate 100]  (both cameras; bitrate in Mbps)
- *     [--es main_res ..] [--ei tele_fps ..] [--ei tele_bitrate ..]  (per camera)
+ *     [--es slot1 wide|main|tele] [--es slot2 wide|main|tele|off]
+ *     [--es res 4k|1080|720] [--ei fps 60] [--ei bitrate 100]  (both slots; bitrate in Mbps)
+ *     [--es slot1_res ..] [--ei slot2_fps ..] [--ei slot2_bitrate ..]  (per slot)
  *     [--ez hdr true] [--ez preview false] [--ez audio true]
  * Results are logged under tag DUALCAM.
  */
@@ -113,10 +115,13 @@ class DualCamActivity : AppCompatActivity() {
     private lateinit var executor: Executor
 
     private var logicalId = ""
-    private var mainId = ""
-    private var secondId: String? = null
-    private var second: SecondCamera? = null
-    private val hasSecond get() = secondId != null
+    /** Physical camera ID per lens; [logicalId] itself for a camera opened directly. */
+    private var lensIds = mapOf<Lens, String>()
+    private lateinit var slots: Slots
+    private val lens1 get() = config1.camera.value!!
+    private val lens2 get() = config2.camera.value
+    private val id1 get() = lensIds.getValue(lens1)
+    private val id2 get() = lens2?.let { lensIds.getValue(it) }
     private lateinit var remote: RemoteAdvertiser
     @Volatile private var liveLine = ""
     private var sensorOrientation = 90
@@ -193,7 +198,7 @@ class DualCamActivity : AppCompatActivity() {
     /** Persists the current UI selections so the next launch restores them. */
     private fun saveSettings() {
         if (suppressSave) return
-        if (!::mode.isInitialized || !::config1.isInitialized || !::config2.isInitialized ||
+        if (!::mode.isInitialized || !::slots.isInitialized ||
             !::previewWhileRecording.isInitialized || !::dynamicRange.isInitialized || !::audio.isInitialized ||
             !::remoteEnabled.isInitialized
         ) return
@@ -203,22 +208,9 @@ class DualCamActivity : AppCompatActivity() {
             .putBoolean("preview", previewWhileRecording.value)
             .putBoolean("audio", audio.value)
             .putBoolean("remote", remoteEnabled.value)
-            .putString("main_res", config1.resolution.value.serialize())
-            .putInt("main_fps", config1.fps.value)
-            .putInt("main_bitrate", config1.bitrate.value)
-            .putString("second_res", config2.resolution.value.serialize())
-            .putInt("second_fps", config2.fps.value)
-            .putInt("second_bitrate", config2.bitrate.value)
+            .apply { slots.values().forEach { (key, value) -> putString(key, value) } }
             .apply()
         sendRemoteSettings()
-    }
-
-    /** Restores one camera's selections silently; falls back to [defaultRes] if nothing was saved. */
-    private fun CameraConfig.restore(prefix: String, defaultRes: Size? = null) {
-        prefs.getString("${prefix}_res", null)?.let { parseSize(it) }?.let { resolution.select(it, notify = false) }
-            ?: defaultRes?.let { resolution.select(it, notify = false) }
-        prefs.getInt("${prefix}_fps", -1).takeIf { it > 0 }?.let { fps.select(it, notify = false) }
-        prefs.getInt("${prefix}_bitrate", -1).takeIf { it >= 0 }?.let { bitrate.select(it, notify = false) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -241,11 +233,11 @@ class DualCamActivity : AppCompatActivity() {
 
         val restartPreview = { handler.post { startPreview() }; Unit }
         val persist = { saveSettings(); Unit }
-        config1 = CameraConfig(findViewById(R.id.config1), restartPreview, persist)
-        config2 = CameraConfig(findViewById(R.id.config2), restartPreview, persist)
+        config1 = CameraConfig(findViewById(R.id.config1), restartPreview, persist) { applyMode() }
+        config2 = CameraConfig(findViewById(R.id.config2), restartPreview, persist) { applyMode() }
+        slots = Slots(config1, config2).apply { setLenses(lensIds.keys) }
         mode = Dropdown(findViewById(R.id.modeLayout)) { applyMode() }
-        mode.setOptions(modeOptions(second))
-        second?.let { findViewById<TextView>(R.id.label2).text = it.label }
+        mode.setOptions(modeOptions)
         dynamicRange = Dropdown(findViewById(R.id.dynamicRangeLayout)) { applyMode() }
         dynamicRange.setOptions(dynamicRangeOptions)
         previewWhileRecording = Dropdown(findViewById(R.id.previewLayout)) { persist() }
@@ -262,23 +254,25 @@ class DualCamActivity : AppCompatActivity() {
         }
         remoteEnabled.setOptions(onOffOptions)
         // Restore last-used settings; unsaved keys keep the SDR / On / 4K defaults.
+        for (config in listOf(config1, config2)) config.resolution.setOptions(listOf("4K" to Size(3840, 2160)))
         prefs.getString("mode", null)?.let { runCatching { Mode.valueOf(it) }.getOrNull() }
             ?.let { mode.select(it, notify = false) }
         dynamicRange.select(prefs.getBoolean("hdr", false), notify = false)
         if (prefs.contains("preview")) previewWhileRecording.select(prefs.getBoolean("preview", true), notify = false)
         audio.select(prefs.getBoolean("audio", false) && hasAudioPermission(), notify = false)
         remoteEnabled.select(prefs.getBoolean("remote", false), notify = false)
-        applyMode()
-        config1.restore("main", Size(3840, 2160))
-        config2.restore("second", Size(3840, 2160))
+        slots.select(prefs.all.mapValues { it.value.toString() }, mode.value, dynamicRange.value)
         applyMode()
 
         if (intent.hasExtra("seconds")) {
             autoTest = true
             mode.select(if (intent.getStringExtra("mode") == "slowmo") Mode.SLOW_MO else Mode.DUAL, notify = false)
             dynamicRange.select(intent.getBooleanExtra("hdr", false), notify = false)
+            val camera = { name: String -> intent.getStringExtra(name)?.let { if (it == "off") "OFF" else it.uppercase() } }
+            slots.select(listOfNotNull(camera("slot1")?.let { "slot1_cam" to it }, camera("slot2")?.let { "slot2_cam" to it }).toMap(),
+                mode.value, dynamicRange.value)
             applyMode()
-            for ((prefix, config) in listOf("main" to config1, "second" to config2)) {
+            for ((prefix, config) in listOf("slot1" to config1, "slot2" to config2)) {
                 config.apply(
                     intent.getStringExtra("${prefix}_res") ?: intent.getStringExtra("res"),
                     intent.getIntExtra("${prefix}_fps", intent.getIntExtra("fps", 0)),
@@ -340,15 +334,15 @@ class DualCamActivity : AppCompatActivity() {
         }
     }
 
-    /** Updates the available options for the selected mode and dynamic range. */
+    /** Updates the available options for the selected mode, dynamic range and slot cameras. */
     private fun applyMode() {
         val m = mode.value
         if (m == Mode.SLOW_MO) dynamicRange.select(false, notify = false)
-        val hdr = dynamicRange.value
-        config1.configure(m, hdr)
-        config2.configure(Mode.DUAL, hdr)
+        slots.configure(m, dynamicRange.value)
+        findViewById<TextView>(R.id.label1).text = lens1.label
+        lens2?.let { findViewById<TextView>(R.id.label2).text = it.label }
         setControlsEnabled(true)
-        preview2.visibility = if (m == Mode.DUAL && hasSecond) View.VISIBLE else View.INVISIBLE
+        preview2.visibility = if (lens2 != null) View.VISIBLE else View.INVISIBLE
         updatePreviewOverlays()
         handler.post { startPreview() }
         saveSettings()
@@ -356,8 +350,8 @@ class DualCamActivity : AppCompatActivity() {
 
     private fun setControlsEnabled(enabled: Boolean) {
         val dual = mode.value == Mode.DUAL
-        config1.setEnabled(enabled)
-        config2.setEnabled(enabled && dual && hasSecond)
+        config1.setEnabled(enabled, cameraChoice = enabled && dual && slots.lenses.size > 1)
+        config2.setEnabled(enabled, cameraChoice = enabled && dual && slots.lenses.size > 1)
         mode.enabled = enabled
         dynamicRange.enabled = enabled && dual
         previewWhileRecording.enabled = enabled
@@ -423,29 +417,30 @@ class DualCamActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    /** Camera IDs as opened ([logical]) and as routed per stream; [main] == [logical] records it directly. */
-    private class KnownCameras(val logical: String, val main: String, val secondId: String? = null,
-                               val second: SecondCamera = SecondCamera.TELE)
+    /** The camera opened ([logical]) and the physical camera per lens; [logical] itself records it directly. */
+    private class KnownCameras(val logical: String, val lenses: Map<Lens, String>)
 
     /**
      * Cameras of the phones in use, by [Build.MODEL], read from `adb shell dumpsys media.camera`.
      * Other phones are detected by focal length in [findCameras].
      */
     private val knownCameras = mapOf(
-        // Logical 0 of physical 2 5 4 6 3: 2 is the 6.9 mm main, 4 the 18 mm 5x tele.
-        "Pixel 8 Pro" to KnownCameras("0", "2", "4"),
-        // Logical 0 of physical 2 4 3: 2 is the 6.81 mm main, 3 the 2.35 mm ultrawide; no tele.
-        "Pixel 7" to KnownCameras("0", "2", "3", SecondCamera.WIDE),
-        // OnePlus exposes its logical multi-cameras (4, 5) to system apps only; 0 is the 5.59 mm main.
-        "CPH2399" to KnownCameras("0", "0"),
+        // Logical 0 of physical 2 5 4 6 3: 3 is the 2.23 mm ultrawide, 2 the 6.9 mm main, 4 the
+        // 18 mm 5x tele; 5 and 6 are the main and tele sensors again.
+        "Pixel 8 Pro" to KnownCameras("0", mapOf(Lens.WIDE to "3", Lens.MAIN to "2", Lens.TELE to "4")),
+        // Logical 0 of physical 2 4 3: 3 is the 2.35 mm ultrawide, 2 the 6.81 mm main; no tele.
+        "Pixel 7" to KnownCameras("0", mapOf(Lens.WIDE to "3", Lens.MAIN to "2")),
+        // OnePlus exposes its ultrawide (2) and logical multi-cameras (4, 5) to system apps only;
+        // 0 is the 5.59 mm main.
+        "CPH2399" to KnownCameras("0", mapOf(Lens.MAIN to "0")),
     )
 
     /**
      * Uses [knownCameras] for this model. Otherwise prefers a rear logical multi-camera with a main
-     * and, if present, a tele lens, and falls back to a plain rear camera with a main lens.
+     * and any ultrawide and tele lenses, and falls back to a plain rear camera with a main lens.
      */
     private fun findCameras(cm: CameraManager): Boolean {
-        knownCameras[Build.MODEL]?.let { return useCameras(cm, it.logical, it.main, it.secondId, it.second) }
+        knownCameras[Build.MODEL]?.let { return useCameras(cm, it.logical, it.lenses) }
         fun focal(id: String) = cm.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)!!.first()
         // Main lenses are 4.5-9 mm on phone sensors (Pixel 6.8, OnePlus 5.6); ultrawides about 2 mm.
         fun isMain(id: String) = focal(id) in 4.5f..9f
@@ -455,15 +450,16 @@ class DualCamActivity : AppCompatActivity() {
         for (id in back) {
             val physical = cm.getCameraCharacteristics(id).physicalCameraIds
             val main = physical.firstOrNull(::isMain) ?: continue
-            return useCameras(cm, id, main, physical.firstOrNull { focal(it) > 15f })
+            val lenses = mapOf(Lens.MAIN to main) +
+                listOfNotNull(physical.firstOrNull { focal(it) < 3f }?.let { Lens.WIDE to it },
+                    physical.firstOrNull { focal(it) > 15f }?.let { Lens.TELE to it })
+            return useCameras(cm, id, lenses)
         }
-        return back.firstOrNull(::isMain)?.let { useCameras(cm, it, it, null) } ?: false
+        return back.firstOrNull(::isMain)?.let { useCameras(cm, it, mapOf(Lens.MAIN to it)) } ?: false
     }
 
-    private fun useCameras(cm: CameraManager, logical: String, main: String, secondId: String?,
-                           second: SecondCamera = SecondCamera.TELE): Boolean {
-        logicalId = logical; mainId = main; this.secondId = secondId
-        this.second = second.takeIf { secondId != null }
+    private fun useCameras(cm: CameraManager, logical: String, lenses: Map<Lens, String>): Boolean {
+        logicalId = logical; lensIds = lenses
         sensorOrientation = cm.getCameraCharacteristics(logical).get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
         return true
     }
@@ -472,7 +468,7 @@ class DualCamActivity : AppCompatActivity() {
         if (device != null) return
         val cm = getSystemService(CameraManager::class.java)
         if (logicalId.isEmpty()) { out("No rear camera with a main lens found"); return }
-        out("Logical $logicalId: main=$mainId ${second?.fileName ?: "second"}=$secondId")
+        out("Logical $logicalId: " + lensIds.entries.joinToString(" ") { (lens, id) -> "${lens.fileName}=$id" })
         cm.openCamera(logicalId, executor, object : CameraDevice.StateCallback() {
             override fun onOpened(d: CameraDevice) { device = d; startPreview() }
             override fun onDisconnected(d: CameraDevice) { d.close(); device = null; out("Camera disconnected") }
@@ -497,13 +493,14 @@ class DualCamActivity : AppCompatActivity() {
         if (recording != null) return
         val hdr = dynamicRange.value
         // Slow-mo previews in a regular session; the high-speed session only exists while recording.
-        // The second camera's view is hidden in slow-mo, so it may not have a surface.
+        // Slot 2's view is hidden in slow-mo and when off, so it may not have a surface.
         val dual = mode.value == Mode.DUAL
-        val pMain = previewSurface(preview1) ?: return
-        val pSecond = if (dual && hasSecond) previewSurface(preview2) ?: return else null
-        val fps = if (dual) maxOf(config1.settings(hdr).fps, if (hasSecond) config2.settings(hdr).fps else 0) else 30
-        val targets = listOfNotNull(pMain to mainId, pSecond?.let { it to secondId!! })
-        previewViewOf = listOfNotNull(pMain to preview1, pSecond?.let { it to preview2 }).toMap()
+        val id2 = id2
+        val p1 = previewSurface(preview1) ?: return
+        val p2 = if (id2 != null) previewSurface(preview2) ?: return else null
+        val fps = if (dual) maxOf(config1.settings(hdr).fps, if (id2 != null) config2.settings(hdr).fps else 0) else 30
+        val targets = listOfNotNull(p1 to id1, p2?.let { it to id2!! })
+        previewViewOf = listOfNotNull(p1 to preview1, p2?.let { it to preview2 }).toMap()
         session?.close(); session = null
         val generation = ++previewGeneration
         try {
@@ -596,12 +593,12 @@ class DualCamActivity : AppCompatActivity() {
 
     private fun startDual(d: CameraDevice, stamp: String, tracks: MutableList<Track>) {
         val hdr = dynamicRange.value
-        tracks += createTrack("main", config1.settings(hdr), mainId, stamp, withAudio = audio.value)
-        secondId?.let { tracks += createTrack(second!!.fileName, config2.settings(hdr), it, stamp) }
+        tracks += createTrack(lens1.fileName, config1.settings(hdr), id1, stamp, withAudio = audio.value)
+        lens2?.let { tracks += createTrack(it.fileName, config2.settings(hdr), lensIds.getValue(it), stamp) }
         val recordOutputs = tracks.map { physical(it.surface, it.physicalId, hdr) }
 
         // Prefer previews + recordings; fall back to recording-only if the HAL rejects them.
-        val previewViews = listOfNotNull(preview1 to mainId, secondId?.let { preview2 to it })
+        val previewViews = listOfNotNull(preview1 to id1, id2?.let { preview2 to it })
         var previewTargets = emptyList<Pair<Surface, String>>()
         if (previewWhileRecording.value) {
             val candidates = previewViews.mapNotNull { (view, id) -> previewSurface(view)?.let { it to id } }
@@ -615,7 +612,7 @@ class DualCamActivity : AppCompatActivity() {
                 if (d.isSessionConfigurationSupported(probe)) previewTargets = candidates
             }
         }
-        previewViewOf = previewTargets.associate { (surface, id) -> surface to if (id == mainId) preview1 else preview2 }
+        previewViewOf = previewTargets.associate { (surface, id) -> surface to if (id == id1) preview1 else preview2 }
         val rec = Recording(tracks, previewTargets.map { it.first })
         recording = rec
         if (!rec.withPreview) out("Recording without preview")
@@ -627,7 +624,7 @@ class DualCamActivity : AppCompatActivity() {
 
     private fun startSlowMo(d: CameraDevice, stamp: String, tracks: MutableList<Track>) {
         val settings = config1.settings(hdr = false)
-        tracks += createTrack("main", settings, mainId, stamp, withAudio = audio.value)
+        tracks += createTrack(Lens.MAIN.fileName, settings, lensIds.getValue(Lens.MAIN), stamp, withAudio = audio.value)
         // High-speed sessions take at most two outputs, both at a high-speed video size, and no
         // physical camera routing; the logical camera at its default 1x zoom streams the main sensor.
         // With the recorder as the only output the high-speed request list holds a single request,
@@ -732,7 +729,7 @@ class DualCamActivity : AppCompatActivity() {
     /** Hides the previews and drops the screen to minimum brightness, or restores both. */
     private fun setRecordingDisplay(dim: Boolean) {
         preview1.visibility = if (dim) View.INVISIBLE else View.VISIBLE
-        preview2.visibility = if (dim || mode.value != Mode.DUAL || !hasSecond) View.INVISIBLE else View.VISIBLE
+        preview2.visibility = if (dim || lens2 == null) View.INVISIBLE else View.VISIBLE
         updatePreviewOverlays()
         window.attributes = window.attributes.apply {
             screenBrightness = if (dim) 0.01f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
@@ -798,27 +795,27 @@ class DualCamActivity : AppCompatActivity() {
         values["preview"]?.let { previewWhileRecording.select(it.toBoolean(), notify = false) }
         // Notifies, so switching audio on asks for the microphone permission if needed.
         values["audio"]?.let { audio.select(it.toBoolean()) }
+        slots.select(values, mode.value, dynamicRange.value)
         applyMode()
-        config1.select("main", values)
-        config2.select("second", values)
         saveSettings()  // also reports the settings as applied back to the tablet
         handler.post { startPreview() }
         out("Settings from tablet applied")
     }
 
-    /** Sends the phone's status to the tablet every second while the screen is open. */
-    /** Reports the current settings and this phone's second camera, for the tablet's settings panel. */
+    /** Reports the current settings and this phone's cameras, for the tablet's settings panel. */
     private fun sendRemoteSettings() {
         if (remote.connectedCount == 0) return
-        val values = listOfNotNull(second?.let { "second" to it.name }).toMap() + mapOf(
+        val values = mapOf(
+            "lenses" to slots.lenses.joinToString(",") { it.name },
             "mode" to mode.value.name,
             "hdr" to dynamicRange.value.toString(),
             "preview" to previewWhileRecording.value.toString(),
             "audio" to audio.value.toString(),
-        ) + config1.values("main") + config2.values("second")
+        ) + slots.values()
         remote.send(RemoteLink.encodeSettings(values))
     }
 
+    /** Sends the phone's status to the tablet every second while the screen is open. */
     private val remoteHeartbeat = object : Runnable {
         override fun run() {
             sendRemoteStatus()
@@ -837,7 +834,7 @@ class DualCamActivity : AppCompatActivity() {
             else -> {
                 val hdr = dynamicRange.value
                 val settings = if (mode.value == Mode.SLOW_MO) "slow-mo main=${config1.settings(false)}"
-                else listOfNotNull("main=${config1.settings(hdr)}", if (hasSecond) "${second!!.fileName}=${config2.settings(hdr)}" else null).joinToString("  ")
+                else listOfNotNull("${lens1.fileName}=${config1.settings(hdr)}", lens2?.let { "${it.fileName}=${config2.settings(hdr)}" }).joinToString("  ")
                 "Ready  $settings$thermalText"
             }
         }
@@ -897,7 +894,7 @@ class DualCamActivity : AppCompatActivity() {
         out("Focus logical: ${describe(result)}")
         out("Exposure logical: ${exposure(result)}")
         for ((id, r) in result.physicalCameraTotalResults) {
-            val name = if (id == mainId) "main" else if (id == secondId) second!!.fileName else id
+            val name = lensIds.entries.firstOrNull { it.value == id }?.key?.fileName ?: id
             out("Focus $name: ${describe(r)}")
             out("Exposure $name: ${exposure(r)}")
         }

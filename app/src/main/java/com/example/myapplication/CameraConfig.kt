@@ -120,9 +120,9 @@ class Slots(val slot1: CameraConfig, val slot2: CameraConfig) {
     private var saved1: Lens? = null
     private var saved2: Lens? = null
 
-    /** Sets the phone's cameras and selects main plus, if present, tele or else ultrawide. */
+    /** Sets the phone's cameras (main if unknown) and selects main plus, if present, tele or else ultrawide. */
     fun setLenses(lenses: Collection<Lens>) {
-        this.lenses = lenses.sorted()
+        this.lenses = lenses.sorted().ifEmpty { listOf(Lens.MAIN) }
         slowMo = false
         slot1.camera.setOptions(lensOptions(this.lenses), keep = Lens.MAIN)
         slot2.camera.setOptions(lensOptions(this.lenses.filter { it != slot1.camera.value }) + ("Off" to null),
