@@ -12,7 +12,9 @@ class Dropdown<T>(private val layout: TextInputLayout, private val onChange: (T)
     private var options: List<Pair<String, T>> = emptyList()
     @Volatile private var current: T? = null
 
-    val value: T get() = current!!
+    /** The selection; null only where null is one of the options. */
+    @Suppress("UNCHECKED_CAST")
+    val value: T get() = current as T
 
     var enabled: Boolean
         get() = layout.isEnabled

@@ -26,7 +26,9 @@ import com.google.android.gms.nearby.connection.PayloadTransferUpdate
 
 /**
  * Tablet controller: discovers phones running the Dual Cam screen, connects to all of them
- * automatically and starts/stops their recordings. Each phone records with its own settings.
+ * automatically and starts/stops their recordings. Each phone reports its settings and its second
+ * camera, and its row offers those settings with that phone's own options; a change made here
+ * is sent to that phone straight away.
  */
 class RemoteControlActivity : AppCompatActivity() {
     private val client by lazy { Nearby.getConnectionsClient(this) }
@@ -41,12 +43,20 @@ class RemoteControlActivity : AppCompatActivity() {
         private val nameView: TextView = view.findViewById(R.id.phoneName)
         private val statusView: TextView = view.findViewById(R.id.phoneStatus)
         private val button: Button = view.findViewById(R.id.phoneButton)
+        private val settingsToggle: Button = view.findViewById(R.id.phoneSettingsToggle)
+        private val settings = PhoneSettings(view) { send(listOf(this), RemoteLink.encodeSettings(it)) }
         var connected = false
         var status: RemoteLink.Status? = null
 
         init {
             nameView.text = name
             button.setOnClickListener { send(listOf(this), if (status?.recording == true) RemoteLink.STOP else RemoteLink.START) }
+            settingsToggle.setOnClickListener { settings.visible = !settings.visible; render() }
+            render()
+        }
+
+        fun showSettings(values: Map<String, String>) {
+            settings.show(values)
             render()
         }
 
@@ -61,6 +71,11 @@ class RemoteControlActivity : AppCompatActivity() {
             nameView.setTextColor(if (s?.recording == true) Color.parseColor("#FF5252") else Color.WHITE)
             nameView.text = if (s?.recording == true) "● $name" else name
             button.isEnabled = connected
+            // Phones ignore settings while recording.
+            settings.enabled = connected && s?.recording != true
+            settingsToggle.isEnabled = settings.known
+            settingsToggle.alpha = if (settings.known) 1f else 0.4f
+            settingsToggle.text = if (settings.visible) "Hide settings" else "Settings"
             button.text = if (s?.recording == true) "Stop" else "Start"
         }
     }
@@ -74,6 +89,7 @@ class RemoteControlActivity : AppCompatActivity() {
         findViewById<Button>(R.id.startAll).setOnClickListener { send(phones.values.toList(), RemoteLink.START) }
         findViewById<Button>(R.id.stopAll).setOnClickListener { send(phones.values.toList(), RemoteLink.STOP) }
     }
+
 
     override fun onResume() {
         super.onResume()
@@ -130,9 +146,16 @@ class RemoteControlActivity : AppCompatActivity() {
     private fun connect(phone: Phone) {
         client.requestConnection("Tablet", phone.endpointId, connectionLifecycle).addOnFailureListener {
             Log.w(RemoteLink.TAG, "connection request to ${phone.name} failed", it)
-            // Retry while the phone is still discovered.
-            mainHandler.postDelayed({ if (phones[phone.endpointId] === phone && !phone.connected) connect(phone) }, 2000)
         }
+        // Retry while the phone is still discovered. Covers refused requests and ones that never
+        // complete, e.g. when the phone restarts advertising mid-handshake; those block new
+        // requests to the endpoint until cancelled.
+        mainHandler.postDelayed({
+            if (phones[phone.endpointId] === phone && !phone.connected) {
+                client.disconnectFromEndpoint(phone.endpointId)
+                connect(phone)
+            }
+        }, 10_000)
     }
 
     private fun remove(phone: Phone) {
@@ -162,6 +185,7 @@ class RemoteControlActivity : AppCompatActivity() {
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
             val message = payload.asBytes()?.let { String(it, Charsets.UTF_8) } ?: return
             val phone = phones[endpointId] ?: return
+            RemoteLink.decodeSettings(message)?.let { phone.showSettings(it); return }
             phone.status = RemoteLink.decodeStatus(message) ?: return
             phone.render()
         }
@@ -173,4 +197,82 @@ class RemoteControlActivity : AppCompatActivity() {
         val ids = targets.filter { it.connected }.map { it.endpointId }
         if (ids.isNotEmpty()) client.sendPayload(ids, RemoteLink.bytes(command))
     }
+}
+
+/**
+ * One phone's recording settings in its row on the tablet. Filled from what the phone reports
+ * (including its second camera, if any) and calls [onChange] with all values when the user picks one.
+ */
+private class PhoneSettings(root: View, private val onChange: (Map<String, String>) -> Unit) {
+    private val panel: View = root.findViewById(R.id.phoneSettings)
+    private val secondColumn: View = root.findViewById(R.id.secondColumn)
+    private val label2: TextView = root.findViewById(R.id.label2)
+    private val config1 = CameraConfig(root.findViewById(R.id.config1), {}, ::changed)
+    private val config2 = CameraConfig(root.findViewById(R.id.config2), {}, ::changed)
+    private val mode = Dropdown<Mode>(root.findViewById(R.id.modeLayout)) { applyMode(); changed() }
+    private val dynamicRange = Dropdown<Boolean>(root.findViewById(R.id.dynamicRangeLayout)) { applyMode(); changed() }
+    private val preview = Dropdown<Boolean>(root.findViewById(R.id.previewLayout)) { changed() }
+    private val audio = Dropdown<Boolean>(root.findViewById(R.id.audioLayout)) { changed() }
+    private var second: SecondCamera? = null
+
+    /** Whether the phone has reported its settings yet. */
+    var known = false
+        private set
+
+    var visible: Boolean
+        get() = panel.visibility == View.VISIBLE
+        set(visible) { panel.visibility = if (visible && known) View.VISIBLE else View.GONE }
+
+    var enabled = true
+        set(enabled) { field = enabled; updateEnabled() }
+
+    init {
+        dynamicRange.setOptions(dynamicRangeOptions)
+        preview.setOptions(previewOptions)
+        audio.setOptions(onOffOptions)
+    }
+
+    /** Shows the settings the phone reported, in the keys of the [RemoteLink.SETTINGS] message. */
+    fun show(values: Map<String, String>) {
+        known = true
+        second = values["second"]?.let { runCatching { SecondCamera.valueOf(it) }.getOrNull() }
+        mode.setOptions(modeOptions(second))
+        secondColumn.visibility = if (second != null) View.VISIBLE else View.GONE
+        second?.let { label2.text = it.label }
+        values["mode"]?.let { runCatching { Mode.valueOf(it) }.getOrNull() }?.let { mode.select(it, notify = false) }
+        values["hdr"]?.let { dynamicRange.select(it.toBoolean(), notify = false) }
+        values["preview"]?.let { preview.select(it.toBoolean(), notify = false) }
+        values["audio"]?.let { audio.select(it.toBoolean(), notify = false) }
+        applyMode()
+        config1.select("main", values)
+        config2.select("second", values)
+    }
+
+    /** Offers the camera options valid for the mode, as on the phone: slow-mo is SDR on the main camera. */
+    private fun applyMode() {
+        if (mode.value == Mode.SLOW_MO) dynamicRange.select(false, notify = false)
+        config1.configure(mode.value, dynamicRange.value)
+        config2.configure(Mode.DUAL, dynamicRange.value)
+        updateEnabled()
+    }
+
+    private fun updateEnabled() {
+        if (!known) return
+        val dual = mode.value == Mode.DUAL
+        mode.enabled = enabled
+        dynamicRange.enabled = enabled && dual
+        preview.enabled = enabled
+        audio.enabled = enabled
+        config1.setEnabled(enabled)
+        config2.setEnabled(enabled && dual)
+    }
+
+    private fun changed() = onChange(values())
+
+    private fun values(): Map<String, String> = mapOf(
+        "mode" to mode.value.name,
+        "hdr" to dynamicRange.value.toString(),
+        "preview" to preview.value.toString(),
+        "audio" to audio.value.toString(),
+    ) + config1.values("main") + (if (second != null) config2.values("second") else emptyMap())
 }

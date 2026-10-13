@@ -13,6 +13,9 @@
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+    <!-- Nearby discovery still fails with MISSING_PERMISSION_ACCESS_COARSE_LOCATION without these -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <!-- Self-update: check GitHub releases for a newer APK -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -31,6 +34,7 @@
             android:name=".DualCamActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.MyApplication.Camera">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

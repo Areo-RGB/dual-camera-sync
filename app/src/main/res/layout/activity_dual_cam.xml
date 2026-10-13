@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- DualCamActivity rearranges the two panes for the orientation: stacked in portrait, side
-     by side in landscape. -->
+<!-- DualCamActivity is landscape only: previews on the left, controls on the right. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#000000"
     android:fitsSystemWindows="true"
-    android:orientation="vertical"
+    android:orientation="horizontal"
     android:padding="8dp">
 
     <ScrollView
         android:id="@+id/cameraPane"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content">
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="3">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -32,9 +32,13 @@
                     android:layout_height="wrap_content">
 
                     <com.example.myapplication.AspectTextureView
-                        android:id="@+id/previewMain"
+                        android:id="@+id/preview1"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content" />
+
+                    <TextView
+                        android:id="@+id/preview1Off"
+                        style="@style/PreviewOff" />
 
                     <TextView
                         style="@style/PreviewLabel"
@@ -42,7 +46,7 @@
                 </FrameLayout>
 
                 <include
-                    android:id="@+id/configMain"
+                    android:id="@+id/config1"
                     layout="@layout/camera_config" />
             </LinearLayout>
 
@@ -58,17 +62,21 @@
                     android:layout_height="wrap_content">
 
                     <com.example.myapplication.AspectTextureView
-                        android:id="@+id/previewTele"
+                        android:id="@+id/preview2"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content" />
 
                     <TextView
+                        android:id="@+id/preview2Off"
+                        style="@style/PreviewOff" />
+
+                    <TextView
                         style="@style/PreviewLabel"
-                        android:text="Tele 5x" />
+                        android:id="@+id/label2" />
                 </FrameLayout>
 
                 <include
-                    android:id="@+id/configTele"
+                    android:id="@+id/config2"
                     layout="@layout/camera_config" />
             </LinearLayout>
         </LinearLayout>
@@ -76,9 +84,10 @@
 
     <LinearLayout
         android:id="@+id/controlsPane"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_marginStart="8dp"
+        android:layout_weight="2"
         android:orientation="vertical">
 
         <TextView

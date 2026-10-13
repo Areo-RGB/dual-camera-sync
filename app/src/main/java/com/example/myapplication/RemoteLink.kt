@@ -17,18 +17,22 @@ import java.util.concurrent.CopyOnWriteArraySet
 
 /**
  * Remote start/stop between a controlling tablet and camera phones over Google Nearby
- * Connections: phones advertise, the tablet discovers and connects to all of them (star
- * topology), and connections are accepted without a PIN. Only short text messages are sent:
+ * Connections: phones advertise, the tablet discovers and connects to all of them, and
+ * connections are accepted without a PIN. P2P_CLUSTER, because under P2P_STAR a discoverer may
+ * only connect to a single advertiser. Only short text messages are sent:
  *
- * - tablet -> phone: [START] or [STOP]
- * - phone -> tablet: `STATUS<TAB>recording(0/1)<TAB>warning(0/1)<TAB>text`
+ * - tablet -> phone: [START], [STOP] or `SETTINGS<TAB>key=value<TAB>...` with the keys mode, hdr,
+ *   preview, audio and main_/tele_ res, fps and bitrate (see [CameraConfig.values])
+ * - phone -> tablet: `STATUS<TAB>recording(0/1)<TAB>warning(0/1)<TAB>text`, and on connecting
+ *   and after every settings change the same `SETTINGS` message plus `second=TELE/WIDE` (see [SecondCamera]), absent without one
  */
 object RemoteLink {
     const val SERVICE_ID = "com.example.myapplication.dualcam"
-    val STRATEGY: Strategy = Strategy.P2P_STAR
+    val STRATEGY: Strategy = Strategy.P2P_CLUSTER
     const val START = "START"
     const val STOP = "STOP"
     const val STATUS = "STATUS"
+    const val SETTINGS = "SETTINGS"
     const val TAG = "REMOTE"
 
     /** Runtime permissions needed to advertise or discover. */
@@ -37,6 +41,9 @@ object RemoteLink {
         add(Manifest.permission.BLUETOOTH_CONNECT)
         add(Manifest.permission.BLUETOOTH_SCAN)
         add(Manifest.permission.NEARBY_WIFI_DEVICES)
+        // Nearby discovery reports MISSING_PERMISSION_ACCESS_COARSE_LOCATION without location.
+        add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        add(Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= 37) add("android.permission.ACCESS_LOCAL_NETWORK")
     }
 
@@ -49,6 +56,15 @@ object RemoteLink {
         val parts = message.split("\t", limit = 4)
         if (parts.size != 4 || parts[0] != STATUS) return null
         return Status(parts[1] == "1", parts[2] == "1", parts[3])
+    }
+
+    fun encodeSettings(values: Map<String, String>) =
+        (listOf(SETTINGS) + values.map { (key, value) -> "$key=$value" }).joinToString("\t")
+
+    fun decodeSettings(message: String): Map<String, String>? {
+        val parts = message.split("\t")
+        if (parts[0] != SETTINGS) return null
+        return parts.drop(1).mapNotNull { part -> part.split("=", limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] } }.toMap()
     }
 
     fun bytes(message: String): Payload = Payload.fromBytes(message.toByteArray(Charsets.UTF_8))
@@ -102,8 +118,10 @@ class RemoteAdvertiser(context: Context, private val onCommand: (String) -> Unit
         endpoints.clear()
     }
 
-    fun send(status: RemoteLink.Status) {
+    fun send(status: RemoteLink.Status) = send(RemoteLink.encodeStatus(status))
+
+    fun send(message: String) {
         if (endpoints.isEmpty()) return
-        client.sendPayload(endpoints.toList(), RemoteLink.bytes(RemoteLink.encodeStatus(status)))
+        client.sendPayload(endpoints.toList(), RemoteLink.bytes(message))
     }
 }

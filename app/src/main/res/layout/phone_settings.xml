@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One phone's recording settings on the tablet, offering that phone's own options. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/phoneSettings"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="8dp"
+    android:orientation="vertical"
+    android:visibility="gone">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/modeLayout"
+            style="@style/ConfigDropdown"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:hint="Mode">
+
+            <com.google.android.material.textfield.MaterialAutoCompleteTextView style="@style/ConfigDropdownField" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/dynamicRangeLayout"
+            style="@style/ConfigDropdown"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:hint="Dynamic range">
+
+            <com.google.android.material.textfield.MaterialAutoCompleteTextView style="@style/ConfigDropdownField" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/previewLayout"
+            style="@style/ConfigDropdown"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:hint="Preview while recording">
+
+            <com.google.android.material.textfield.MaterialAutoCompleteTextView style="@style/ConfigDropdownField" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/audioLayout"
+            style="@style/ConfigDropdown"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:hint="Audio">
+
+            <com.google.android.material.textfield.MaterialAutoCompleteTextView style="@style/ConfigDropdownField" />
+        </com.google.android.material.textfield.TextInputLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:orientation="vertical">
+
+            <TextView
+                style="@style/RemoteSectionLabel"
+                android:text="Main 1x" />
+
+            <include
+                android:id="@+id/config1"
+                layout="@layout/camera_config" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/secondColumn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/label2"
+                style="@style/RemoteSectionLabel" />
+
+            <include
+                android:id="@+id/config2"
+                layout="@layout/camera_config" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
